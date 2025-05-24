@@ -3,190 +3,238 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-// We will uncomment and use these later:
-// use Vimeo\Vimeo;
-use App\Models\Video;
 use Vimeo\Vimeo;
+use App\Models\Video;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
+use App\Jobs\ProcessVideoThumbnails;
+use Illuminate\Support\Str;
 
 class VideoController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
+    private const MAX_VIDEO_SIZE = 2048000; // 2GB
+    private const MAX_TRAILER_SIZE = 51200; // 50MB
+    private const MAX_THUMBNAIL_SIZE = 2048; // 2MB
+
     public function index()
     {
-        // Fetch videos for the authenticated user, newest first, with pagination
-        // Also include videos where user_id is NULL (uploaded before user association)
-        // for the current user to see.
-        $userId = auth()->id();
-        $videos = Video::where(function ($query) use ($userId) {
-                           $query->where('user_id', $userId)
-                                 ->orWhereNull('user_id');
-                       })
-                       ->orderBy('created_at', 'desc')
-                       ->paginate(9); // Show 9 videos per page, adjust as needed
+        $videos = Video::where('user_id', auth()->id())
+                      ->with(['user'])
+                      ->orderBy('created_at', 'desc')
+                      ->paginate(12);
+                      
         return view('dashboard', compact('videos'));
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
     public function create()
     {
-        // Logic to display the video upload form
-        return view('upload');
+        return view('videos.create');
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
     public function store(Request $request)
     {
-        $request->validate([
-            'video_file' => 'required|file|mimetypes:video/mp4,video/quicktime,video/x-msvideo,video/x-flv,video/x-matroska|max:512000', // Max 500MB, adjust as needed. Added more mimetypes.
-            'title' => 'required|string|max:255',
-            'description' => 'nullable|string|max:5000',
+        $validated = $this->validateRequest($request);
+
+        if (!$this->isVimeoConfigured()) {
+            return back()->with('error', 'Video service not configured')->withInput();
+        }
+
+        return DB::transaction(function () use ($request, $validated) {
+            try {
+                $paths = $this->storeLocalFiles($request);
+                $vimeoData = $this->uploadToVimeo($request, $validated);
+                $video = $this->createVideoRecord($validated, $paths, $vimeoData);
+                
+                ProcessVideoThumbnails::dispatch($video);
+                
+                return redirect()
+                    ->route('videos.show', $video)
+                    ->with('success', 'Video uploaded successfully!');
+                    
+            } catch (\Exception $e) {
+                $this->handleUploadError($e, $paths ?? []);
+                return back()->with('error', $this->getUserFriendlyError($e))->withInput();
+            }
+        });
+    }
+
+    public function show(Video $video)
+    {
+        $this->authorize('view', $video);
+        return view('videos.show', compact('video'));
+    }
+
+    private function validateRequest(Request $request): array
+    {
+        return $request->validate([
+            'video_file'   => [
+                'required',
+                'file',
+                'mimetypes:video/mp4,video/quicktime,video/x-msvideo',
+                'max:' . self::MAX_VIDEO_SIZE
+            ],
+            'title'        => 'required|string|max:255',
+            'description'  => 'nullable|string|max:5000',
+            'thumbnail'    => [
+                'required',
+                'image',
+                'mimes:jpeg,png,jpg,gif,webp',
+                'max:' . self::MAX_THUMBNAIL_SIZE
+            ],
+            'trailer'      => [
+                'nullable',
+                'file',
+                'mimetypes:video/mp4,video/quicktime',
+                'max:' . self::MAX_TRAILER_SIZE
+            ],
+            'release_date' => 'required|date|after_or_equal:today',
+            'duration'    => 'required|integer|min:1|max:1440', // Max 24 hours
+            'genre'       => 'nullable|string|max:255',
+            'language'    => 'nullable|string|max:255',
+            'cast'        => 'nullable|array|max:20',
+            'cast.*.role' => 'required_with:cast|string|max:255',
+            'cast.*.name' => 'required_with:cast|string|max:255',
+            'is_private'  => 'nullable|boolean',
+            'price'       => 'nullable|numeric|min:0|max:999.99',
         ]);
+    }
 
-        try {
-            $client = new Vimeo(
-                config('services.vimeo.client_id'),
-                config('services.vimeo.client_secret'),
-                config('services.vimeo.access_token')
-            );
+    private function isVimeoConfigured(): bool
+    {
+        if (empty(config('services.vimeo.access_token'))) {
+            Log::error('Vimeo configuration missing');
+            return false;
+        }
+        return true;
+    }
 
-            $filePath = $request->file('video_file')->getRealPath();
+    private function storeLocalFiles(Request $request): array
+    {
+        $paths = [];
+        
+        $paths['thumbnail'] = $request->file('thumbnail')
+            ->store('thumbnails', 'public');
+            
+        if ($request->hasFile('trailer')) {
+            $paths['trailer'] = $request->file('trailer')
+                ->store('trailers', 'public');
+        }
+        
+        if (!$request->file('video_file')->isValid()) {
+            throw new \Exception('Invalid video file upload');
+        }
+        
+        return $paths;
+    }
 
-            // Log before upload attempt
-            Log::info('Attempting to upload video to Vimeo: ' . $request->input('title'));
+    private function uploadToVimeo(Request $request, array $validated): array
+    {
+        $client = $this->vimeoClient();
+        $filePath = $request->file('video_file')->getRealPath();
+        
+        if (!file_exists($filePath)) {
+            throw new \Exception('Temporary video file missing');
+        }
+        
+        Log::info('Starting Vimeo upload', ['title' => $validated['title']]);
+        
+        $params = [
+            'name' => $validated['title'],
+            'description' => $validated['description'],
+            'privacy' => [
+                'view' => $validated['is_private'] ? 'disable' : 'anybody'
+            ]
+        ];
+        
+        $uri = $client->upload($filePath, $params);
+        
+        if (!$uri) {
+            throw new \Exception('Vimeo upload failed: No URI returned');
+        }
+        
+        $response = $client->request($uri . '?fields=uri,name,description,link,player_embed_url,pictures.sizes,privacy.view');
+        
+        if ($response['status'] !== 200) {
+            throw new \Exception('Failed to fetch video details from Vimeo');
+        }
+        
+        return [
+            'uri' => $uri,
+            'link' => $response['body']['link'] ?? null,
+            'embed_html' => $response['body']['player_embed_url'] ?? null,
+            'thumbnail_url' => $this->getBestThumbnail($response['body']['pictures']['sizes'] ?? []),
+            'privacy' => $response['body']['privacy']['view'] ?? null
+        ];
+    }
 
-            $uri = $client->upload($filePath, [
-                'name' => $request->input('title'),
-                'description' => $request->input('description'),
-                // 'privacy' => [
-                //     'view' => 'anybody', // or 'nobody', 'contacts', 'users', 'password', 'disable'
-                //     'embed' => 'public', // or 'whitelist'
-                // ],
-            ]);
+    private function getBestThumbnail(array $sizes): ?string
+    {
+        if (empty($sizes)) return null;
+        
+        usort($sizes, function ($a, $b) {
+            return $b['width'] - $a['width'];
+        });
+        
+        return $sizes[0]['link'] ?? null;
+    }
 
-            if (!$uri) {
-                Log::error('Vimeo upload failed: No URI returned.', ['title' => $request->input('title')]);
-                return back()->with('error', 'Error uploading video to Vimeo: No URI returned. Check Vimeo credentials and API limits.')->withInput();
+    private function createVideoRecord(array $validated, array $paths, array $vimeoData): Video
+    {
+        return Video::create([
+            'title' => $validated['title'],
+            'description' => $validated['description'],
+            'slug' => Str::slug($validated['title']) . '-' . Str::random(6),
+            'vimeo_uri' => $vimeoData['uri'],
+            'vimeo_link' => $vimeoData['link'],
+            'embed_html' => $vimeoData['embed_html'],
+            'thumbnail_url' => $vimeoData['thumbnail_url'],
+            'user_id' => auth()->id(),
+            'trailer_path' => $paths['trailer'] ?? null,
+            'thumbnail_path' => $paths['thumbnail'],
+            'cast' => $validated['cast'] ?? null,
+            'release_date' => $validated['release_date'],
+            'duration' => $validated['duration'],
+            'genre' => $validated['genre'],
+            'language' => $validated['language'],
+            'is_private' => $validated['is_private'] ?? false,
+            'price' => $validated['price'] ?? null,
+            'vimeo_privacy' => $vimeoData['privacy']
+        ]);
+    }
+
+    private function handleUploadError(\Exception $e, array $paths)
+    {
+        Log::error('Video upload failed: ' . $e->getMessage(), [
+            'exception' => $e
+        ]);
+        
+        foreach ($paths as $path) {
+            if ($path && Storage::disk('public')->exists($path)) {
+                Storage::disk('public')->delete($path);
             }
-
-            // Fetch more complete video data from Vimeo, including embed HTML or player link
-            // Note: player_embed_url might require specific permissions or a Pro account for certain privacy settings.
-            $videoDataResponse = $client->request($uri . '?fields=uri,name,description,link,player_embed_url,pictures.sizes');
-
-            if ($videoDataResponse['status'] !== 200) {
-                Log::error('Failed to fetch video data from Vimeo after upload.', [
-                    'uri' => $uri,
-                    'status' => $videoDataResponse['status'],
-                    'body' => $videoDataResponse['body']
-                ]);
-                // Even if fetching details fails, we might have the URI, so consider saving minimal info
-                // or inform the user that some details couldn't be fetched.
-                return back()->with('error', 'Video uploaded but failed to fetch complete details from Vimeo. Status: ' . $videoDataResponse['status'])->withInput();
-            }
-
-            $videoDetails = $videoDataResponse['body'];
-
-            // Create the video record in the database
-            Video::create([
-                'title' => $videoDetails['name'] ?? $request->input('title'),
-                'description' => $videoDetails['description'] ?? $request->input('description'),
-                'vimeo_uri' => $videoDetails['uri'],
-                'vimeo_link' => $videoDetails['link'] ?? null,
-                'embed_html' => $videoDetails['player_embed_url'] ?? null, // This is often an iframe
-                'user_id' => auth()->id(), // Associate with the authenticated user
-            ]);
-
-            Log::info('Video uploaded and details stored successfully: ' . $videoDetails['name'] . ' for user: ' . auth()->id());
-            return redirect()->route('dashboard')->with('success', 'Video uploaded successfully!');
-
-        } catch (\Vimeo\Exceptions\VimeoUploadException $e) {
-            // Specific Vimeo upload error
-            Log::error('VimeoUploadException: ' . $e->getMessage(), [
-                'title' => $request->input('title'), 
-                'trace' => $e->getTraceAsString()
-            ]);
-            return back()->with('error', 'Vimeo Upload Error: ' . $e->getMessage())->withInput();
-        } catch (\Vimeo\Exceptions\VimeoRequestException $e) {
-            // Specific Vimeo API request error
-            Log::error('VimeoRequestException: ' . $e->getMessage(), [
-                'title' => $request->input('title'), 
-                'trace' => $e->getTraceAsString()
-            ]);
-            return back()->with('error', 'Vimeo API Request Error: ' . $e->getMessage())->withInput();
-        } catch (\Exception $e) {
-            // General error
-            Log::error('General error during video upload: ' . $e->getMessage(), [
-                'title' => $request->input('title'), 
-                'trace' => $e->getTraceAsString()
-            ]);
-            return back()->with('error', 'An unexpected error occurred: ' . $e->getMessage())->withInput();
         }
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
+    private function getUserFriendlyError(\Exception $e): string
     {
-        // Not explicitly in the plan, but good for RESTful design
-        // Could show a single video's details
-        return response('Show Video ' . $id . ' - Not yet implemented');
-    }
-
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(string $id)
-    {
-        // For future enhancements: Edit titles or video metadata
-        return response('Edit Video Form for ' . $id . ' - Not yet implemented');
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
-    {
-        // For future enhancements: Update video metadata
-        return response('Update Video Logic for ' . $id . ' - Not yet implemented');
-    }
-
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(Video $video)
-    {
-        // Check if the authenticated user owns the video
-        if (auth()->id() !== $video->user_id) {
-            return redirect()->route('dashboard')->with('error', 'You are not authorized to delete this video.');
+        if ($e instanceof \Vimeo\Exceptions\VimeoUploadException) {
+            return 'Video upload service is currently unavailable. Please try again later.';
         }
-
-        try {
-            // Optional: Delete from Vimeo first (requires Vimeo API call)
-            // $client = new Vimeo(config('services.vimeo.client_id'), config('services.vimeo.client_secret'), config('services.vimeo.access_token'));
-            // if ($video->vimeo_uri) {
-            //     $client->request($video->vimeo_uri, [], 'DELETE');
-            //     Log::info('Video deleted from Vimeo: ' . $video->vimeo_uri);
-            // }
-
-            $video->delete();
-            Log::info('Video deleted from database: ' . $video->title . ' (ID: ' . $video->id . ') by user: ' . auth()->id());
-            return redirect()->route('dashboard')->with('success', 'Video deleted successfully.');
-
-        } catch (\Vimeo\Exceptions\VimeoRequestException $e) {
-            Log::error('Vimeo API error while trying to delete video from Vimeo: ' . $e->getMessage(), ['video_id' => $video->id, 'vimeo_uri' => $video->vimeo_uri]);
-            // Decide if you still want to delete from local DB or show an error
-            // For now, let's assume if Vimeo deletion fails, we might not delete locally or we inform the user specifically.
-            return redirect()->route('dashboard')->with('error', 'Could not delete video from Vimeo. Please try again. ' . $e->getMessage());
-        } catch (\Exception $e) {
-            Log::error('Error deleting video: ' . $e->getMessage(), ['video_id' => $video->id]);
-            return redirect()->route('dashboard')->with('error', 'Error deleting video: ' . $e->getMessage());
+        
+        if ($e instanceof \Vimeo\Exceptions\VimeoRequestException) {
+            return 'Could not communicate with video service. Please try again.';
         }
+        
+        return 'Upload failed: ' . $e->getMessage();
+    }
+
+    private function vimeoClient(): Vimeo
+    {
+        return new Vimeo(
+            config('services.vimeo.client_id'),
+            config('services.vimeo.client_secret'),
+            config('services.vimeo.access_token')
+        );
     }
 }

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f9;
+        }
+        .sidebar {
+            width: 250px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 100%;
+            background-color: #343a40;
+            padding-top: 20px;
+            transition: all 0.3s;
+        }
+        .sidebar.collapsed {
+            width: 70px;
+        }
+        .sidebar.collapsed .sidebar-brand,
+        .sidebar.collapsed .nav-link span {
+            display: none;
+        }
+        .sidebar-brand {
+            color: #fff;
+            font-size: 1.5rem;
+            text-align: center;
+            padding: 15px;
+            font-weight: bold;
+        }
+        .sidebar .nav-link {
+            color: #adb5bd;
+            padding: 10px 15px;
+            font-size: 1rem;
+        }
+        .sidebar .nav-link:hover,
+        .sidebar .nav-link.active {
+            color: #fff;
+            background-color: #495057;
+            border-radius: 5px;
+        }
+        .content {
+            margin-left: 250px;
+            padding: 20px;
+            transition: all 0.3s;
+        }
+        .content.collapsed {
+            margin-left: 70px;
+        }
+        .navbar {
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 70px;
+            }
+            .sidebar .sidebar-brand,
+            .sidebar .nav-link span {
+                display: none;
+            }
+            .content {
+                margin-left: 70px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            Admin Dashboard
+        </div>
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link active" href="#"><i class="fas fa-home me-2"></i><span>Dashboard</span></a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#"><i class="fas fa-film me-2"></i><span>Movies</span></a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#"><i class="fas fa-users me-2"></i><span>Users</span></a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#"><i class="fas fa-chart-bar me-2"></i><span>Analytics</span></a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#"><i class="fas fa-cog me-2"></i><span>Settings</span></a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#"><i class="fas fa-sign-out-alt me-2"></i><span>Logout</span></a>
+            </li>
+        </ul>
+    </div>
+
+    <!-- Main Content -->
+    <div class="content" id="content">
+        <!-- Navbar -->
+        <nav class="navbar navbar-expand-lg">
+            <div class="container-fluid">
+                <button class="btn btn-outline-secondary me-2" id="toggleSidebar">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="navbar-brand">Movie Admin Panel</div>
+                <div class="ms-auto">
+                    <span class="navbar-text me-3">Welcome, Admin</span>
+                    <button class="btn btn-outline-primary"><i class="fas fa-user"></i> Profile</button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <div class="container-fluid mt-4">
+            <h2>Dashboard Overview</h2>
+            <div class="row">
+                <!-- Stats Cards -->
+                <div class="col-md-4">
+                    <div class="card p-3 mb-4">
+                        <h5>Total Movies</h5>
+                        <h3>150</h3>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card p-3 mb-4">
+                        <h5>Total Users</h5>
+                        <h3>1,234</h3>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card p-3 mb-4">
+                        <h5>Total Views</h5>
+                        <h3>12,345</h3>
+                    </div>
+                </div>
+           ала</div>
+
+            <!-- Movie Management Section -->
+            <div class="card p-4 mb-4">
+                <h4>Movie Management</h4>
+                <p>Manage your movie uploads, edit details, or delete movies.</p>
+                <a href="movie-upload.html" class="btn btn-primary mb-3">Add New Movie</a>
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Genre</th>
+                            <th>Release Date</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Sample Movie 1</td>
+                            <td>Action</td>
+                            <td>2025-01-15</td>
+                            <td>
+                                <button class="btn btn-sm btn-warning me-1">Edit</button>
+                                <button class="btn btn-sm btn-danger">Delete</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Sample Movie 2</td>
+                            <td>Drama</td>
+                            <td>2025-03-22</td>
+                            <td>
+                                <button class="btn btn-sm btn-warning me-1">Edit</button>
+                                <button class="btn btn-sm btn-danger">Delete</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Analytics Placeholder -->
+            <div class="card p-4">
+                <h4>Analytics</h4>
+                <p>View statistics and insights about movie views and user activity.</p>
+                <div class="alert alert-info">Analytics chart placeholder (e.g., views over time).</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap 5 JS and Popper.js -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+    <script>
+        // Sidebar toggle functionality
+        const toggleSidebar = document.getElementById('toggleSidebar');
+        const sidebar = document.getElementById('sidebar');
+        const content = document.getElementById('content');
+
+        toggleSidebar.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+            content.classList.toggle('collapsed');
+        });
+    </script>
+</body>
+</html>
